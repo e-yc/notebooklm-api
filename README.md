@@ -1,4 +1,4 @@
-# notebooklm-client
+# notebooklm-api
 
 Unofficial TypeScript/JavaScript client and CLI for the Google NotebookLM API.
 
@@ -7,7 +7,7 @@ Fork of [`notebooklm`](https://www.npmjs.com/package/notebooklm) with extensive 
 ## Install
 
 ```bash
-npm install -g notebooklm-client
+npm install -g notebooklm-api
 ```
 
 ## Authentication
@@ -66,7 +66,7 @@ notebooklm research deep <notebookId> "research query"
 ## Programmatic Usage
 
 ```typescript
-import { NotebookLMClient } from 'notebooklm-client';
+import { NotebookLMClient } from 'notebooklm-api';
 
 const client = await NotebookLMClient.fromStorage();
 
