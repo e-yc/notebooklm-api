@@ -1,16 +1,16 @@
 {
-  "name": "notebooklm-client",
+  "name": "notebooklm-api",
   "version": "0.2.0",
   "description": "Unofficial TypeScript/JavaScript client and CLI for Google NotebookLM API",
   "author": "e-yc",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/e-yc/notebooklm-client.git"
+    "url": "git+https://github.com/e-yc/notebooklm-api.git"
   },
-  "homepage": "https://github.com/e-yc/notebooklm-client#readme",
+  "homepage": "https://github.com/e-yc/notebooklm-api#readme",
   "bugs": {
-    "url": "https://github.com/e-yc/notebooklm-client/issues"
+    "url": "https://github.com/e-yc/notebooklm-api/issues"
   },
   "keywords": [
     "notebooklm",
