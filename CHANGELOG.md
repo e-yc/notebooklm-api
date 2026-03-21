@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.3 (2026-03-21)
+
+### Bug Fixes
+
+- **Source import RPC params**: Fixed `importSources` (IMPORT_RESEARCH_SOURCES / `LBwxtb`) parameter structure from `[notebookId, [[url, title]]]` to `[null, [1], taskId, notebookId, [[null, null, [url, title], null*8, 2], ...]]`. Previous format caused Google to return null — sources discovered during research were never imported.
+- **Source extraction double-nesting**: Fixed `parseResearchResult` source parsing — sources at `innerData[3]` are wrapped as `[[[url, title, snippet, 1], ...]]` (double-nested). Parser was iterating the outer array and passing the entire source list as a single entry to `parseResearchSource`. Added unwrapping logic.
+- **taskId propagation**: `research()` now passes `taskId` to `importSources()` — required by the IMPORT_RESEARCH_SOURCES RPC.
+
 ## 0.2.2 (2026-03-21)
 
 ### Bug Fixes

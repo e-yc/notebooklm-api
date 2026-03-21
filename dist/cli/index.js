@@ -4468,17 +4468,21 @@ class ResearchAPI {
     logger8.debug(`POLL_RESEARCH raw response (${JSON.stringify(result).length} chars): ${JSON.stringify(result).substring(0, 2000)}`);
     return parseResearchResult(result, taskId);
   }
-  async importSources(notebookId, sources) {
+  async importSources(notebookId, sources, taskId) {
     const validSources = sources.filter((s) => s.url);
     if (validSources.length === 0) {
+      logger8.debug('No valid sources to import (all filtered out)');
       return [];
     }
     logger8.debug(`Importing ${validSources.length} research sources`);
-    const sourceParams = validSources.map((s) => [s.url, s.title]);
-    const result = await this.core.rpcCall("LBwxtb" /* IMPORT_RESEARCH_SOURCES */, [
-      notebookId,
-      sourceParams
+    // Each source: [null, null, [url, title], null, null, null, null, null, null, null, 2]
+    const sourceParams = validSources.map((s) => [
+      null, null, [s.url, s.title || s.url], null, null, null, null, null, null, null, 2
     ]);
+    const params = [null, [1], taskId || "", notebookId, sourceParams];
+    logger8.debug(`Import params taskId=${taskId}, sourceCount=${sourceParams.length}`);
+    const result = await this.core.rpcCall("LBwxtb" /* IMPORT_RESEARCH_SOURCES */, params);
+    logger8.debug(`Import result: ${JSON.stringify(result).substring(0, 500)}`);
     return parseImportedSourceIds(result);
   }
   async research(notebookId, query, options = {}) {
@@ -4495,9 +4499,12 @@ class ResearchAPI {
     while (Date.now() - startTime < timeoutMs) {
       const result = await this.poll(notebookId, task.taskId);
       if (result.status === "completed") {
+        logger8.debug(`Research completed. autoImport=${autoImport}, sources.length=${result.sources.length}`);
         let importedSourceIds;
         if (autoImport && result.sources.length > 0) {
-          importedSourceIds = await this.importSources(notebookId, result.sources);
+          importedSourceIds = await this.importSources(notebookId, result.sources, result.taskId || task.taskId);
+        } else if (autoImport) {
+          logger8.debug('autoImport=true but no sources found in result');
         }
         return { result, importedSourceIds };
       }
@@ -4552,10 +4559,17 @@ function parseResearchResult(data, taskId) {
         const innerData = taskEntry[1];
         if (Array.isArray(innerData)) {
           // innerData = [notebookId, [query, sourceType], sourceType, sourcesOrNull, summaryOrStatus, ...]
-          // Check sources at innerData[3]
+          // Sources at innerData[3] are double-wrapped: [[[url, title, snippet, 1], ...], summary]
+          // or single-wrapped: [[url, title, snippet, 1], ...]
           const sourcesData = innerData[3];
           if (Array.isArray(sourcesData)) {
-            for (const src of sourcesData) {
+            // Unwrap: find the actual array of [url, title, snippet] entries
+            let sourceEntries = sourcesData;
+            if (sourceEntries.length > 0 && Array.isArray(sourceEntries[0]) && Array.isArray(sourceEntries[0][0])) {
+              // Double-wrapped: [[[url, title, ...], ...], summary]
+              sourceEntries = sourceEntries[0];
+            }
+            for (const src of sourceEntries) {
               if (Array.isArray(src)) {
                 const source = parseResearchSource(src);
                 if (source) {
@@ -18344,7 +18358,7 @@ var ArtifactSchema = exports_external.object({
 });
 
 // src/index.ts
-var VERSION = "0.2.2";
+var VERSION = "0.2.3";
 
 // src/cli/commands/login.ts
 import { mkdir } from "node:fs/promises";
