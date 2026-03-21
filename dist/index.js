@@ -1177,23 +1177,122 @@ function sleep(ms) {
 // src/api/chat.ts
 var logger6 = createLogger("chat");
 
+var _chatReqIdCounter = 100000;
+var _DEFAULT_BL = "boq_labs-tailwind-frontend_20260301.03_p0";
+
 class ChatAPI {
   core;
   constructor(core) {
     this.core = core;
   }
+  async _getSourceIds(notebookId) {
+    const result = await this.core.rpcCall("hizoJc" /* GET_SOURCE */, [notebookId]);
+    const ids = [];
+    const findIds = (arr) => {
+      if (!Array.isArray(arr)) return;
+      for (const item of arr) {
+        if (!Array.isArray(item)) continue;
+        const id = item[0];
+        if (typeof id === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+          ids.push(id);
+        } else {
+          findIds(item);
+        }
+      }
+    };
+    findIds(result);
+    return ids;
+  }
   async ask(notebookId, question, options = {}) {
-    const { conversationId, sourceIds } = options;
-    const convId = conversationId ?? generateConversationId();
+    let { conversationId, sourceIds } = options;
     const isFollowUp = !!conversationId;
+    if (!conversationId) {
+      conversationId = generateConversationId();
+    }
     logger6.debug(`Asking question in notebook ${notebookId}`, {
-      conversationId: convId,
+      conversationId,
       isFollowUp
     });
-    const history = isFollowUp ? this.core.getCachedTurns(convId) : [];
-    const params = buildAskParams(notebookId, question, convId, history, sourceIds);
-    const result = await this.core.rpcCall("QUERY_ENDPOINT" /* ASK */, params);
-    const { answer, references } = parseAskResponse(result);
+
+    // Get source IDs if not provided
+    if (!sourceIds) {
+      sourceIds = await this._getSourceIds(notebookId);
+    }
+
+    // Build conversation history for follow-ups
+    let conversationHistory = null;
+    if (isFollowUp) {
+      const cachedTurns = this.core.getCachedTurns(conversationId);
+      if (cachedTurns.length > 0) {
+        conversationHistory = [];
+        for (const turn of cachedTurns) {
+          conversationHistory.push([turn.answer, null, 2]);
+          conversationHistory.push([turn.question, null, 1]);
+        }
+      }
+    }
+
+    // Build params in the correct format for the streaming endpoint
+    const sourcesArray = sourceIds.map(sid => [[[sid]]]);
+    const params = [
+      sourcesArray,
+      question,
+      conversationHistory,
+      [2, null, [1], [1]],
+      conversationId,
+      null,
+      null,
+      notebookId,
+      1
+    ];
+
+    const paramsJson = JSON.stringify(params);
+    const fReq = [null, paramsJson];
+    const fReqJson = JSON.stringify(fReq);
+    const encodedReq = encodeURIComponent(fReqJson);
+
+    let body = `f.req=${encodedReq}`;
+    if (this.core.auth.csrfToken) {
+      body += `&at=${encodeURIComponent(this.core.auth.csrfToken)}`;
+    }
+    body += "&";
+
+    // Build URL with query params
+    _chatReqIdCounter += 100000;
+    const urlParams = new URLSearchParams();
+    urlParams.set("bl", _DEFAULT_BL);
+    urlParams.set("hl", "en");
+    urlParams.set("_reqid", String(_chatReqIdCounter));
+    urlParams.set("rt", "c");
+    if (this.core.auth.sessionId) {
+      urlParams.set("f.sid", this.core.auth.sessionId);
+    }
+
+    const url = `${API_ENDPOINTS.QUERY}?${urlParams.toString()}`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        Cookie: this.core.auth.getCookieHeader(),
+        "X-Same-Domain": "1"
+      },
+      body
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      logger6.debug(`Chat Error Response: ${errText}`);
+      throw new RPCError(`Chat request failed: HTTP ${response.status}`, "ASK");
+    }
+
+    const responseText = await response.text();
+    const { answer, references, serverConversationId } = parseStreamingAskResponse(responseText);
+
+    if (serverConversationId) {
+      conversationId = serverConversationId;
+    }
+
     const turn = {
       id: generateTurnId(),
       question,
@@ -1201,11 +1300,11 @@ class ChatAPI {
       references,
       timestamp: new Date
     };
-    this.core.addCachedTurn(convId, turn);
+    this.core.addCachedTurn(conversationId, turn);
     return {
       answer,
       references,
-      conversationId: convId
+      conversationId
     };
   }
   async getHistory(notebookId, conversationId) {
@@ -1224,21 +1323,178 @@ class ChatAPI {
   }
   async configure(notebookId, config) {
     logger6.debug(`Configuring chat for notebook: ${notebookId}`, config);
-    await this.core.rpcCall("QUERY_ENDPOINT" /* CONFIGURE_CHAT */, [
+    // configure uses RENAME_NOTEBOOK RPC (s0tc2d), not the streaming endpoint
+    const goalArray = config.persona ? [config.mode, config.persona] : [config.mode];
+    const chatSettings = [goalArray, [config.responseLength]];
+    await this.core.rpcCall("s0tc2d" /* RENAME_NOTEBOOK */, [
       notebookId,
-      config.mode,
-      config.responseLength,
-      config.persona ?? null
+      [[null, null, null, null, null, null, null, chatSettings]]
     ]);
   }
   async setMode(notebookId, mode) {
     const config = {
-      mode,
+      mode: 1,
       responseLength: 2 /* BALANCED */
     };
     await this.configure(notebookId, config);
   }
 }
+
+function parseStreamingAskResponse(responseText) {
+  if (responseText.startsWith(")]}'")) {
+    responseText = responseText.slice(4);
+  }
+
+  const lines = responseText.trim().split("\n");
+  let bestMarkedAnswer = "";
+  let bestUnmarkedAnswer = "";
+  const allReferences = [];
+  let serverConversationId = null;
+
+  function processChunk(jsonStr) {
+    let data;
+    try {
+      data = JSON.parse(jsonStr);
+    } catch {
+      return;
+    }
+    if (!Array.isArray(data)) return;
+
+    for (const item of data) {
+      if (!Array.isArray(item) || item.length < 3) continue;
+      if (item[0] !== "wrb.fr") continue;
+
+      const innerJson = item[2];
+      if (typeof innerJson !== "string") continue;
+
+      let innerData;
+      try {
+        innerData = JSON.parse(innerJson);
+      } catch {
+        continue;
+      }
+
+      if (!Array.isArray(innerData) || innerData.length === 0) continue;
+      const first = innerData[0];
+      if (!Array.isArray(first) || first.length === 0) continue;
+
+      const text = first[0];
+      if (typeof text !== "string" || !text) continue;
+
+      const isAnswer = Array.isArray(first[4]) && first[4].length > 0 && first[4][first[4].length - 1] === 1;
+
+      // Extract server conversation ID from first[2]
+      if (Array.isArray(first[2]) && first[2].length > 0 && typeof first[2][0] === "string") {
+        serverConversationId = first[2][0];
+      }
+
+      if (isAnswer && text.length > bestMarkedAnswer.length) {
+        bestMarkedAnswer = text;
+      } else if (!isAnswer && text.length > bestUnmarkedAnswer.length) {
+        bestUnmarkedAnswer = text;
+      }
+
+      // Parse citations from first[4][3]
+      if (Array.isArray(first[4]) && first[4].length > 3 && Array.isArray(first[4][3])) {
+        for (const cite of first[4][3]) {
+          const ref = parseStreamingCitation(cite);
+          if (ref) allReferences.push(ref);
+        }
+      }
+    }
+  }
+
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i].trim();
+    if (!line) { i++; continue; }
+    try {
+      parseInt(line, 10);
+      if (isNaN(parseInt(line, 10))) throw new Error();
+      i++;
+      if (i < lines.length) processChunk(lines[i]);
+      i++;
+    } catch {
+      processChunk(line);
+      i++;
+    }
+  }
+
+  const answer = bestMarkedAnswer || bestUnmarkedAnswer || "";
+  return { answer, references: allReferences, serverConversationId };
+}
+
+function parseStreamingCitation(cite) {
+  if (!Array.isArray(cite) || cite.length < 2) return null;
+  const citeInner = cite[1];
+  if (!Array.isArray(citeInner)) return null;
+
+  // Extract source ID from cite[1][5] — recursive UUID search
+  const sourceId = findUuidInNested(citeInner.length > 5 ? citeInner[5] : null);
+  if (!sourceId) return null;
+
+  // Extract chunk ID from cite[0][0]
+  let chunkId = null;
+  if (Array.isArray(cite[0]) && cite[0].length > 0 && typeof cite[0][0] === "string") {
+    chunkId = cite[0][0];
+  }
+
+  // Extract cited text from cite[1][4]
+  let citedText = "";
+  if (citeInner.length > 4 && Array.isArray(citeInner[4])) {
+    const texts = [];
+    for (const pw of citeInner[4]) {
+      if (!Array.isArray(pw) || !pw[0]) continue;
+      const pd = pw[0];
+      if (!Array.isArray(pd) || pd.length < 3) continue;
+      collectTexts(pd[2], texts);
+    }
+    citedText = texts.join(" ");
+  }
+
+  return {
+    sourceId,
+    sourceTitle: "",
+    text: citedText,
+    startChar: 0,
+    endChar: 0,
+    chunkId
+  };
+}
+
+function findUuidInNested(data, depth = 0) {
+  if (depth > 10 || data == null) return null;
+  if (typeof data === "string") {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(data) ? data : null;
+  }
+  if (Array.isArray(data)) {
+    for (const item of data) {
+      const result = findUuidInNested(item, depth + 1);
+      if (result) return result;
+    }
+  }
+  return null;
+}
+
+function collectTexts(nested, texts) {
+  if (!Array.isArray(nested)) return;
+  for (const group of nested) {
+    if (!Array.isArray(group)) continue;
+    for (const inner of group) {
+      if (!Array.isArray(inner) || inner.length < 3) continue;
+      const val = inner[2];
+      if (typeof val === "string" && val.trim()) {
+        texts.push(val.trim());
+      } else if (Array.isArray(val)) {
+        for (const item of val) {
+          if (typeof item === "string" && item.trim()) texts.push(item.trim());
+        }
+      }
+    }
+  }
+}
+
+// Legacy functions kept for backward compat but no longer used by ask()
 function buildAskParams(notebookId, question, conversationId, history, sourceIds) {
   const historyParams = history.map((turn) => [turn.question, turn.answer]);
   const params = [

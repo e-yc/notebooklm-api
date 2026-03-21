@@ -1,6 +1,6 @@
 {
   "name": "notebooklm-api",
-  "version": "0.2.0",
+  "version": "0.2.2",
   "description": "Unofficial TypeScript/JavaScript client and CLI for Google NotebookLM API",
   "author": "e-yc",
   "license": "MIT",

@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.2.2 (2026-03-21)
+
+### Bug Fixes
+
+- **Research RPC params**: Fixed parameter structure for START_FAST_RESEARCH and START_DEEP_RESEARCH — was using flat `[notebookId, query, sourceType]`, corrected to `[[query, sourceType], null, 1, notebookId]` (fast) and `[null, [1], [query, sourceType], 5, notebookId]` (deep). Previous format caused Google to return null with error code `[3]`.
+- **Poll RPC params**: Fixed POLL_RESEARCH params from `[notebookId, taskId]` to `[null, null, notebookId]`. Poll returns all tasks for the notebook.
+- **Research result parsing**: Rewrote `parseResearchResult` to handle actual response structure `[[[taskId, innerData, ts, ts], ...]]` instead of expected flat `[statusCode, summary, sources]`. Now correctly finds task by ID, extracts sources/summary, and detects completion status.
+- **Deep research timeout**: Increased default from 120s to 900s (15 min) — deep research takes 5-15 minutes. Fast research keeps 120s default.
+- **CLI `--timeout` option**: Added `-t, --timeout <ms>` flag to `research web` command for custom timeout values.
+- **Version string**: Fixed hardcoded `0.1.0` in CLI to match package version.
+
+### RPC Parameter Reference
+
+Correct parameter structures (verified against [teng-lin/notebooklm-py](https://github.com/teng-lin/notebooklm-py)):
+
+| Method | ID | Params |
+|--------|-----|--------|
+| START_FAST_RESEARCH | `Ljjv0c` | `[[query, sourceType], null, 1, notebookId]` |
+| START_DEEP_RESEARCH | `QA9ei` | `[null, [1], [query, sourceType], 5, notebookId]` |
+| POLL_RESEARCH | `e3bVqc` | `[null, null, notebookId]` |
+
 ## 0.2.0 (2026-03-20)
 
 Fork of `notebooklm@0.1.1` by kaelen with extensive bug fixes and new features.
